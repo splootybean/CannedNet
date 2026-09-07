@@ -1,14 +1,17 @@
 using CannedNet;
 using CannedNet.Data;
+using CannedNet.Hubs;
+using CannedNet.Models;
+using CannedNet.Models.Messages.Contracts.Enums;
+using CannedNet.Models.Messages.Contracts.Responses;
+using CannedNet.Models.Messages.Entities;
+using CannedNet.Services;
+using CannedNet.Services.Infrastructure;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using CannedNet.Hubs;
-using CannedNet.Models;
-using Microsoft.AspNetCore.SignalR;
-using CannedNet.Services;
-using CannedNet.Services.Infrastructure;
 
 namespace CannedNet.Services.Controllers;
 
@@ -47,9 +50,6 @@ public class APIController : ControllerBase
 
     [HttpGet("relationships/v2/get")]
     public IResult GetRelationships() => Results.Content("[]", "application/json");
-
-    [HttpGet("messages/v2/get")]
-    public IResult GetMessages() => Results.Content("[]", "application/json");
 
     [HttpGet("playerReputation/v1/{id}")]
     public IResult GetPlayerReputation(string id) =>
@@ -1887,6 +1887,87 @@ public class APIController : ControllerBase
         catch (Exception ex)
         {
             return Results.Problem($"Error uploading image: {ex.Message}");
+        }
+    }
+
+    [HttpGet(template: "messages/v2/get")]
+    [ProducesResponseType(typeof(IReadOnlyList<MessageResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<MessageResponse>>> RefreshMessagesAsync(
+        HttpRequest request,
+        AppDbContext dbContext,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            #region Token Parsing
+            var authHeader = request.Headers.Authorization.ToString();
+
+            if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                return Unauthorized();
+
+            var token = authHeader.Substring("Bearer ".Length);
+            var id = _jwtService.ValidateAndGetAccountId(token);
+
+            if (string.IsNullOrEmpty(id) || !int.TryParse(id.AsSpan(), out var accountId))
+                return Unauthorized();
+            #endregion
+
+            var messages = await dbContext.Messages
+                .AsNoTracking()
+                .Where(x => x.AccountId == accountId && !x.Read)
+                .ToListAsync(cancellationToken);
+
+            return Ok(messages.Map());
+        }
+        catch
+        {
+            return Unauthorized();
+        }
+    }
+
+    [HttpPost(Name = "messages/v2/send")]
+    [ProducesResponseType(typeof(IActionResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(IActionResult), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> SendMessageAsync(
+        HttpRequest request,
+        AppDbContext dbContext,
+
+        [FromForm(Name = "ToPlayerId")] long remoteAccountId,
+        [FromForm(Name = "Type")] MessageType messageType,
+        [FromForm(Name = "Data")] string data,
+        [FromForm(Name = "RoomId")] long? roomId,
+
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            #region Token Parsing
+            var authHeader = request.Headers.Authorization.ToString();
+
+            if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                return Unauthorized();
+
+            var token = authHeader.Substring("Bearer ".Length);
+            var id = _jwtService.ValidateAndGetAccountId(token);
+
+            if (string.IsNullOrEmpty(id) || !int.TryParse(id.AsSpan(), out var accountId))
+                return Unauthorized();
+            #endregion
+
+            if (!Message.MESSAGE_VALID_MESSAGE_TYPES.Contains(messageType))
+                return Forbid();
+
+            var message = Message.Create(accountId, remoteAccountId, messageType, data, roomId, null);
+
+            await dbContext.Messages.AddAsync(message, cancellationToken);
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            return Ok();
+        }
+        catch
+        {
+            return Unauthorized();
         }
     }
 

@@ -1,4 +1,5 @@
 ﻿using CannedNet.Models;
+using CannedNet.Models.Messages.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace CannedNet.Data;
@@ -32,6 +33,8 @@ public class AppDbContext : DbContext
     public DbSet<ConsumableItem> ConsumableItems { get; set; }
     public DbSet<ReceivedGift> ReceivedGifts { get; set; }
     public DbSet<EarnableReward> EarnableRewards { get; set; }
+
+    public DbSet<Message> Messages => Set<Message>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
